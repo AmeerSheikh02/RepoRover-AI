@@ -2,7 +2,6 @@ export type AnalysisSectionId =
   | "workspace"
   | "backend-signals"
   | "explainability-coverage"
-  | "file-tree"
   | "used-languages"
   | "repo-summary"
   | "code-explanation"
@@ -19,7 +18,6 @@ const ANALYZE_MINIMAL_SECTIONS = new Set<AnalysisSectionId>([
   "workspace",
   "backend-signals",
   "explainability-coverage",
-  "file-tree",
   "used-languages",
   "repo-summary",
   "code-explanation",

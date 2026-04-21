@@ -144,37 +144,6 @@ export default function AnalyzePageClient() {
       ),
     [bundle],
   );
-  const fileTreeEntries = useMemo(() => {
-    if (!bundle) {
-      return [];
-    }
-
-    const filePaths = new Set<string>();
-
-    for (const trace of bundle.traces.token_traces) {
-      if (trace.file_path) {
-        filePaths.add(trace.file_path);
-      }
-    }
-
-    for (const trace of bundle.traces.ast_traces) {
-      if (trace.file_path) {
-        filePaths.add(trace.file_path);
-      }
-    }
-
-    for (const issue of bundle.quality.issues) {
-      if (issue.file_path) {
-        filePaths.add(issue.file_path);
-      }
-    }
-
-    if (bundle.traces.focus_file) {
-      filePaths.add(bundle.traces.focus_file);
-    }
-
-    return Array.from(filePaths).sort((left, right) => left.localeCompare(right)).slice(0, 24);
-  }, [bundle]);
 
   const deriveProjectNameFromPath = (projectPath: string) => {
     const normalized = projectPath.replace(/\\/g, "/").replace(/\/+$/, "");
@@ -435,25 +404,6 @@ export default function AnalyzePageClient() {
                 <StatTile icon={Code2} label="Tokens" value={bundle?.traces.token_traces.length ?? 0} />
                 <StatTile icon={FileText} label="AST nodes" value={bundle?.traces.ast_traces.length ?? 0} />
                 <StatTile icon={Route} label="Paths" value={bundle?.traces.graph_traces.length ?? 0} />
-              </CardContent>
-              </Card>
-            ) : null}
-            {canRenderOnAnalyze("file-tree") ? (
-              <Card className="border-border/70 bg-card/90 shadow-sm">
-              <CardHeader>
-                <CardTitle className="text-base">File tree</CardTitle>
-                <CardDescription>Paths discovered from explainability and quality findings.</CardDescription>
-              </CardHeader>
-              <CardContent className="space-y-2 text-sm">
-                {fileTreeEntries.length ? (
-                  fileTreeEntries.map((path) => (
-                    <div key={path} className="rounded-md border bg-background/80 px-2 py-1 font-mono text-xs">
-                      {path}
-                    </div>
-                  ))
-                ) : (
-                  <span className="text-sm text-muted-foreground">No file paths detected yet.</span>
-                )}
               </CardContent>
               </Card>
             ) : null}
