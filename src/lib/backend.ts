@@ -192,6 +192,7 @@ export type RepositoryTreeNode = {
   language: string | null;
   size?: number;
   extension?: string;
+  files?: string[];
   children?: RepositoryTreeNode[];
 };
 

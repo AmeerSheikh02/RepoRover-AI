@@ -1,12 +1,10 @@
 const KEYWORD_LABELS: Array<{ keywords: string[]; label: string }> = [
   { keywords: ["auth", "login", "signup"], label: "Authentication Module" },
-  { keywords: ["api", "service"], label: "Backend Service Module" },
-  { keywords: ["component", "ui"], label: "UI Components" },
+  { keywords: ["user", "profile"], label: "User Management Module" },
+  { keywords: ["api", "service"], label: "Backend Services Module" },
+  { keywords: ["component", "ui"], label: "User Interface Components Module" },
   { keywords: ["config", "env"], label: "Configuration Module" },
-  { keywords: ["page", "route", "screen"], label: "Feature Views" },
-  { keywords: ["model", "schema", "entity"], label: "Data Models" },
-  { keywords: ["test", "spec", "__tests__"], label: "Test Suite" },
-  { keywords: ["util", "helper", "common"], label: "Utilities" },
+  { keywords: ["database", "model"], label: "Data Layer Module" },
 ];
 
 export type PathNodeKind = "file" | "folder";
@@ -48,6 +46,10 @@ function classifySimplifiedLabel(normalizedPath: string, kind: PathNodeKind): st
   return `${humanizeSegment(terminalSegment)} File`;
 }
 
+export function classifyFileCategory(filePath: string, kind: PathNodeKind = "file"): string {
+  return simplifyFilePathLabel(filePath, kind);
+}
+
 export function simplifyFilePathLabel(filePath: string, kind: PathNodeKind = "file"): string {
   const normalizedPath = normalizeFilePath(filePath);
   const cacheKey = buildCacheKey(normalizedPath, kind);
@@ -74,7 +76,7 @@ export function precomputeSimplifiedLabelMap(filePaths: string[], kind: PathNode
 }
 
 export function getSimplifiedLabelIcon(simplifiedLabel: string): string {
-  if (simplifiedLabel.includes("UI")) {
+  if (simplifiedLabel.includes("Interface") || simplifiedLabel.includes("UI")) {
     return "🎨";
   }
 
@@ -82,7 +84,7 @@ export function getSimplifiedLabelIcon(simplifiedLabel: string): string {
     return "🔐";
   }
 
-  if (simplifiedLabel.includes("Backend")) {
+  if (simplifiedLabel.includes("Backend") || simplifiedLabel.includes("Data Layer")) {
     return "⚙️";
   }
 

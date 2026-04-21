@@ -11,6 +11,7 @@ import { canRenderOnDashboard } from "@/lib/analysis-sections";
 import { useSession } from "@/lib/auth-client";
 import { clearInMemoryAnalysisBundle, getInMemoryAnalysisBundle } from "@/lib/analysis-memory";
 import { analyzeRepoStructure, type AnalyzeRepoResponse, type RepositoryTreeNode } from "@/lib/backend";
+import { classifyFileCategory } from "@/lib/simplified-label";
 import { Activity, ArrowRight, FileText, Folder, GitBranch, LayoutDashboard, Loader2, Sparkles, TriangleAlert } from "lucide-react";
 
 type SavedBundle = any;
@@ -21,7 +22,194 @@ type VisualTreeLine = {
   node: RepositoryTreeNode;
 };
 
+type TreeFile = {
+  name: string;
+  path: string;
+  extension?: string;
+};
+
+type SelectedModule = {
+  name: string;
+  path: string;
+  files: string[];
+};
+
 const STORAGE_KEY_PREFIX = "Reponium:last-analysis";
+const MODULE_FOLDER_COLOR = "#F59E0B";
+const MODULE_FILE_COLOR = "#0EA5E9";
+const MAX_SIMPLIFIED_MODULES = 5;
+
+const GENERIC_PATH_SEGMENTS = new Set([
+  "src",
+  "app",
+  "pages",
+  "page",
+  "components",
+  "component",
+  "lib",
+  "utils",
+  "utility",
+  "services",
+  "service",
+  "backend",
+  "frontend",
+  "server",
+  "client",
+  "routes",
+  "route",
+  "api",
+  "tests",
+  "test",
+  "spec",
+  "public",
+  "assets",
+  "styles",
+  "style",
+  "migrations",
+]);
+
+function pluralizeFileCount(count: number) {
+  return `${count} file${count === 1 ? "" : "s"}`;
+}
+
+function inferModuleLabel(file: TreeFile): string {
+  return classifyFileCategory(file.path);
+}
+
+function getImportanceScore(file: TreeFile): number {
+  const label = inferModuleLabel(file);
+  const pathText = `${file.path} ${file.name}`.toLowerCase();
+  const fileName = file.name.toLowerCase();
+
+  const baseScores: Record<string, number> = {
+    "Authentication Module": 100,
+    "User Management Module": 95,
+    "Backend Services Module": 90,
+    "Data Layer Module": 85,
+    "User Interface Components Module": 80,
+    "Configuration Module": 70,
+  };
+
+  let score = baseScores[label] ?? 50;
+
+  if (/(index|main|app|server|router|controller|service|model|schema|config|auth|login|user|profile)/.test(pathText)) {
+    score += 12;
+  }
+
+  if (fileName.startsWith("index") || fileName.startsWith("main")) {
+    score += 8;
+  }
+
+  if (file.path.split("/").length <= 3) {
+    score += 6;
+  }
+
+  return score;
+}
+
+function toSlug(value: string) {
+  return value.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "") || "module";
+}
+
+function humanizeSegment(value: string) {
+  return value
+    .replace(/\.[^.]+$/, "")
+    .replace(/[-_]+/g, " ")
+    .replace(/([a-z])([A-Z])/g, "$1 $2")
+    .replace(/\b\w/g, (character) => character.toUpperCase())
+    .trim() || value;
+}
+
+function getFilePathSegments(filePath: string) {
+  return filePath
+    .replace(/\\/g, "/")
+    .replace(/^\/+|\/+$/g, "")
+    .split("/")
+    .map((segment) => segment.trim())
+    .filter(Boolean);
+}
+
+function inferSubmoduleLabel(file: TreeFile): string {
+  const segments = getFilePathSegments(file.path);
+  const folderSegments = segments.slice(0, -1).filter((segment) => !GENERIC_PATH_SEGMENTS.has(segment.toLowerCase()));
+  const folderCandidate = folderSegments[folderSegments.length - 1];
+
+  if (folderCandidate) {
+    return humanizeSegment(folderCandidate);
+  }
+
+  return humanizeSegment(file.name.replace(/\.[^.]+$/, "")) || "Core";
+}
+
+function buildModuleNode(label: string, files: TreeFile[], parentPath: string): RepositoryTreeNode {
+  return {
+    name: label,
+    type: "folder",
+    path: `${parentPath}/module:${toSlug(label)}`,
+    icon: "folder",
+    color: MODULE_FOLDER_COLOR,
+    language: null,
+    files: files.map((file) => file.path),
+    children: [],
+  };
+}
+
+function buildSemanticModuleTree(root: RepositoryTreeNode): RepositoryTreeNode {
+  if (root.type === "file") {
+    return root;
+  }
+
+  const files: TreeFile[] = [];
+
+  const collectFiles = (node: RepositoryTreeNode) => {
+    if (node.type === "file") {
+      files.push({ name: node.name, path: node.path, extension: node.extension });
+      return;
+    }
+
+    for (const child of node.children || []) {
+      collectFiles(child);
+    }
+  };
+
+  collectFiles(root);
+
+  const groupedFiles = new Map<string, TreeFile[]>();
+
+  for (const file of files) {
+    const label = inferModuleLabel(file);
+    const bucket = groupedFiles.get(label) || [];
+    bucket.push(file);
+    groupedFiles.set(label, bucket);
+  }
+
+  const moduleNodes = Array.from(groupedFiles.entries())
+    .map(([label, moduleFiles]) => ({
+      label,
+      moduleFiles,
+      score: Math.max(...moduleFiles.map((file) => getImportanceScore(file))),
+    }))
+    .sort((left, right) => {
+      const scoreDelta = right.score - left.score;
+      if (scoreDelta !== 0) {
+        return scoreDelta;
+      }
+      return left.label.localeCompare(right.label);
+    })
+    .slice(0, MAX_SIMPLIFIED_MODULES)
+    .map(({ label, moduleFiles }) => buildModuleNode(label, moduleFiles, root.path));
+
+  return {
+    name: root.name,
+    type: "folder",
+    path: root.path,
+    icon: root.icon,
+    color: root.color,
+    language: root.language,
+    files: files.map((file) => file.path),
+    children: moduleNodes,
+  };
+}
 
 function buildMermaidDefinition(flowPath: string[]) {
   if (!flowPath.length) {
@@ -63,12 +251,20 @@ function normalizeTreeNode(value: unknown): RepositoryTreeNode | null {
 
   const name = typeof raw.name === "string" && raw.name.trim() ? raw.name : "repo";
   const path = typeof raw.path === "string" && raw.path.trim() ? raw.path : ".";
+  const icon = typeof raw.icon === "string" && raw.icon.trim() ? raw.icon : type === "folder" ? "folder" : "file";
+  const color = typeof raw.color === "string" && raw.color.trim() ? raw.color : type === "folder" ? MODULE_FOLDER_COLOR : MODULE_FILE_COLOR;
+  const language = typeof raw.language === "string" || raw.language === null ? raw.language : null;
+  const files = Array.isArray(raw.files) ? raw.files.filter((file): file is string => typeof file === "string" && file.trim()) : undefined;
 
   if (type === "file") {
     return {
       name,
       type,
       path,
+      icon,
+      color,
+      language,
+      files,
       size: typeof raw.size === "number" ? raw.size : undefined,
       extension: typeof raw.extension === "string" ? raw.extension : undefined,
     };
@@ -83,6 +279,10 @@ function normalizeTreeNode(value: unknown): RepositoryTreeNode | null {
     name,
     type,
     path,
+    icon,
+    color,
+    language,
+    files,
     children,
   };
 }
@@ -201,6 +401,8 @@ export default function DashboardPageClient() {
   const [repoTreeResponse, setRepoTreeResponse] = useState<AnalyzeRepoResponse | null>(null);
   const [isTreeLoading, setIsTreeLoading] = useState(false);
   const [treeError, setTreeError] = useState<string | null>(null);
+  const [selectedModule, setSelectedModule] = useState<SelectedModule | null>(null);
+  const [treeMode, setTreeMode] = useState<"original" | "simplified">("original");
 
   const storageKey = useMemo(() => {
     const userId = session?.user?.id;
@@ -306,7 +508,7 @@ export default function DashboardPageClient() {
     [bundle],
   );
 
-  const repositoryTree = useMemo(() => {
+  const originalRepositoryTree = useMemo(() => {
     const apiTree = repoTreeResponse?.hierarchy;
     if (apiTree) {
       return sortTree(apiTree);
@@ -329,10 +531,21 @@ export default function DashboardPageClient() {
     return buildTreeFromPaths(fallbackPaths, bundle?.project?.project_name || "repo");
   }, [bundle, repoTreeResponse]);
 
-  const visualTreeLines = useMemo(
-    () => (repositoryTree ? collectVisualTreeLines(repositoryTree) : []),
-    [repositoryTree],
+  const simplifiedRepositoryTree = useMemo(
+    () => (originalRepositoryTree ? buildSemanticModuleTree(originalRepositoryTree) : null),
+    [originalRepositoryTree],
   );
+
+  const activeRepositoryTree = treeMode === "original" ? originalRepositoryTree : simplifiedRepositoryTree;
+
+  const visualTreeLines = useMemo(
+    () => (activeRepositoryTree ? collectVisualTreeLines(activeRepositoryTree) : []),
+    [activeRepositoryTree],
+  );
+
+  useEffect(() => {
+    setSelectedModule(null);
+  }, [treeMode]);
 
   const isEmpty = !bundle;
 
@@ -421,20 +634,46 @@ export default function DashboardPageClient() {
                 {canRenderOnDashboard("risks") ? (
                   <Card className="border-border/70 bg-card/95 shadow-sm">
                     <CardHeader>
-                      <CardTitle>Repository tree</CardTitle>
-                      <CardDescription>Visual file/folder tree generated from the hierarchical repository structure.</CardDescription>
+                      <div className="flex flex-wrap items-center justify-between gap-3">
+                        <div>
+                          <CardTitle>{treeMode === "original" ? "Original file tree" : "Simplified module tree"}</CardTitle>
+                          <CardDescription>
+                            {treeMode === "original"
+                              ? "The actual repository structure with folders and files."
+                              : "Grouped modules with one optional sub-module layer for a minimal overview."}
+                          </CardDescription>
+                        </div>
+                        <div className="inline-flex rounded-lg border bg-muted/40 p-1">
+                          <Button
+                            type="button"
+                            variant={treeMode === "original" ? "default" : "ghost"}
+                            size="sm"
+                            onClick={() => setTreeMode("original")}
+                          >
+                            Original Mode
+                          </Button>
+                          <Button
+                            type="button"
+                            variant={treeMode === "simplified" ? "default" : "ghost"}
+                            size="sm"
+                            onClick={() => setTreeMode("simplified")}
+                          >
+                            Simplified Mode
+                          </Button>
+                        </div>
+                      </div>
                     </CardHeader>
                     <CardContent className="max-h-[420px] overflow-auto rounded-none border-0 bg-transparent p-0">
                       {isTreeLoading ? (
                         <div className="flex items-center gap-2 px-6 py-4 text-sm text-muted-foreground">
                           <Loader2 className="h-4 w-4 animate-spin" />
-                          Scanning repository tree (optimized for large repos)...
+                          Scanning repository structure and grouping related files into modules...
                         </div>
                       ) : treeError ? (
                         <div className="space-y-2 px-6 py-4">
                           <p className="text-sm text-destructive">{treeError}</p>
                           <p className="text-xs text-muted-foreground">
-                            Showing fallback tree from saved analysis evidence when available.
+                            Showing fallback module tree from saved analysis evidence when available.
                           </p>
                         </div>
                       ) : null}
@@ -453,12 +692,38 @@ export default function DashboardPageClient() {
                           ) : null}
                           {visualTreeLines.map((line) => {
                             const isFolder = line.node.type === "folder";
+                            const isModule = isFolder && Boolean(line.node.files?.length);
                             const displayName = isFolder ? `${line.node.name}/` : line.node.name;
 
                             return (
                               <div
                                 key={`${line.node.path}:${line.prefix}:${line.branch}`}
-                                className="flex items-center gap-1 whitespace-pre text-foreground/90"
+                                className={`flex items-center gap-1 whitespace-pre text-foreground/90 ${treeMode === "simplified" && isModule ? "cursor-pointer rounded-md px-1 py-0.5 transition hover:bg-muted/50" : ""}`}
+                                role={isModule ? "button" : undefined}
+                                tabIndex={isModule ? 0 : undefined}
+                                onClick={() => {
+                                  if (treeMode !== "simplified" || !isModule) {
+                                    return;
+                                  }
+
+                                  setSelectedModule({
+                                    name: line.node.name,
+                                    path: line.node.path,
+                                    files: line.node.files || (line.node.children || []).filter((child) => child.type === "file").map((child) => child.path || child.name),
+                                  });
+                                }}
+                                onKeyDown={(event) => {
+                                  if (treeMode !== "simplified" || !isModule || (event.key !== "Enter" && event.key !== " ")) {
+                                    return;
+                                  }
+
+                                  event.preventDefault();
+                                  setSelectedModule({
+                                    name: line.node.name,
+                                    path: line.node.path,
+                                    files: line.node.files || (line.node.children || []).filter((child) => child.type === "file").map((child) => child.path || child.name),
+                                  });
+                                }}
                               >
                                 <span className="text-muted-foreground">{line.prefix}{line.branch}</span>
                                 {isFolder ? (
@@ -470,6 +735,18 @@ export default function DashboardPageClient() {
                               </div>
                             );
                           })}
+                          {treeMode === "simplified" && selectedModule ? (
+                            <div className="mt-4 rounded-lg border border-dashed border-border/70 bg-muted/20 p-3 text-xs text-muted-foreground">
+                              <div className="mb-2 font-semibold text-foreground">Original files for {selectedModule.name}</div>
+                              <div className="space-y-1">
+                                {selectedModule.files.map((filePath) => (
+                                  <div key={filePath} className="break-all">
+                                    {filePath}
+                                  </div>
+                                ))}
+                              </div>
+                            </div>
+                          ) : null}
                         </div>
                       ) : !isTreeLoading ? (
                         <div className="px-6 py-4 text-sm text-muted-foreground">No repository tree data available yet.</div>
